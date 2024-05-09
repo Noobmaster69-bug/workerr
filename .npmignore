@@ -1,0 +1,11 @@
+node_modules
+public
+lib
+src
+index.html
+package-lock.json
+README.md
+tsconfig.build.json
+tsconfig.node.json
+tsconfig.json
+vite.config.ts
