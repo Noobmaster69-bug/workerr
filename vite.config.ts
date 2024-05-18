@@ -7,7 +7,10 @@ export default defineConfig({
   plugins: [react(), dts({ include: ["lib"] })],
   build: {
     lib: {
-      entry: resolve(__dirname, "lib/main.ts"),
+      entry: {
+        main: resolve(__dirname, "lib/mthread/index.ts"),
+        worker: resolve(__dirname, "lib/wthread/index.ts"),
+      },
       formats: ["es"],
     },
     copyPublicDir: false,

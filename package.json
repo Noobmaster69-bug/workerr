@@ -3,21 +3,37 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "main": "dist/main.js",
-  "types": "dist/main.d.ts",
+  "main": "./dist/main.js",
+  "exports": {
+    "./main": {
+      "import": {
+        "default": "./dist/main.js",
+        "types": "./dist/mthread/index.d.ts"
+      }
+    },
+    "./worker": {
+      "import": {
+        "default": "./dist/worker.js",
+        "types": "./dist/wthread/index.d.ts"
+      }
+    }
+  },
   "files": [
     "dist"
   ],
   "scripts": {
     "dev": "vite",
+    "build:example": "tsc && vite build -c vite.config.ex.ts",
     "build": "tsc --p ./tsconfig.build.json && vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview"
   },
-  "dependencies": {},
+  "dependencies": {
+    "events": "^3.3.0",
+    "react-router-dom": "^6.23.1",
+    "workerr": "file:workerr-0.0.0.tgz"
+  },
   "devDependencies": {
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
     "@types/node": "^20.12.11",
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
@@ -27,6 +43,8 @@
     "eslint": "^8.57.0",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.6",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
     "typescript": "^5.2.2",
     "vite": "^5.2.0",
     "vite-plugin-dts": "^3.9.1"
