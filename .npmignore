@@ -9,3 +9,4 @@ tsconfig.build.json
 tsconfig.node.json
 tsconfig.json
 vite.config.ts
+.vscode
