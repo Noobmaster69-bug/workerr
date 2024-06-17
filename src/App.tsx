@@ -3,13 +3,21 @@ import reactLogo from "./assets/react.svg";
 import viteLogo from "/vite.svg";
 import "./App.css";
 import MyWorker from "./worker?worker&url";
-import { WorkerManager } from "../lib/mthread";
-const a = new WorkerManager({
+
+import { Cmd } from "./command";
+import { WorkerManager } from "workerr/main"
+
+const a = new WorkerManager<Cmd>({
   url: MyWorker,
   options: {
     type: "module",
   },
+  maxWorkload: 2,
+  autoScale: false,
+  maxWorker: 2,
 });
+
+
 function App() {
   const [count, setCount] = useState(0);
 

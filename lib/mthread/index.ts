@@ -1,8 +1,15 @@
 import { ExecRequest } from "../messages/exec";
 import { Worker2MainMsg } from "../messages/messages";
-import { Command } from "../types";
-import { uuid } from "../utils";
+import type { Command } from "../utils";
 import { EventEmitter } from "events";
+
+function uuid() {
+  var temp_url = URL.createObjectURL(new Blob());
+  var uuid = temp_url.toString();
+  URL.revokeObjectURL(temp_url);
+  return uuid.substr(uuid.lastIndexOf("/") + 1); // remove prefix (e.g. blob:null/, blob:www.test.com/, ...)
+}
+
 interface WorkerManagerConstructorBase {
   /**
    * The second parameter of Worker constructor.
@@ -16,6 +23,8 @@ interface WorkerManagerConstructorBase {
   maxWorkload?: number;
 
   autoScale?: boolean;
+
+  maxWorker?: number;
 }
 
 interface WorkerManagerConstructorWithWorkerFactory
@@ -46,42 +55,53 @@ type WorkerManagerConstructor =
   | WorkerManagerConstructorWithWorkerFactory
   | WorkerManagerConstructorWithUrl;
 
-const ErrorMessages = {
-  timeout: "timeout",
-};
-
 type Events = {
+  "todoQueue.push": [{ requestId: string }];
   "exec-complete": [
     {
       id: string;
+      payload: any;
     }
   ];
+  "exec-error": [
+    {
+      id: string;
+      payload: any;
+    }
+  ]
 };
 
+export interface QueueItem<CMD> {
+  id: string;
+  command: keyof CMD;
+  body: any;
+  signal?: AbortSignal;
+}
+interface WorkerArrayItem {
+  id: string;
+  wk: Promise<Worker>;
+  workload: string[];
+}
 export class WorkerManager<CMD extends Command> {
   private maxWorkload = Infinity;
   private autoScale = false;
+  private maxWorker = Infinity;
 
   private workerOptions?: WorkerOptions;
   private workerFactory: (options?: WorkerOptions) => Worker;
 
-  private queue: {
-    id: string;
-    command: keyof CMD;
-    args: any[];
-  }[] = [];
-  private workers: {
-    id: string;
-    wk: Worker;
-    workload: string[];
-  }[] = [];
+  private todoQueue: QueueItem<CMD>[] = [];
+  private pendingQueue: QueueItem<CMD>[] = [];
+
+  private workers: WorkerArrayItem[] = [];
   private eventEmitter = new EventEmitter<Events>();
 
   constructor(options: WorkerManagerConstructor) {
-    const { initialTimeout, maxWorkload } = options;
+    const { maxWorkload } = options;
     this.workerOptions = options.options;
     this.maxWorkload = maxWorkload ?? this.maxWorkload;
     this.autoScale = options.autoScale ?? this.autoScale;
+    this.maxWorker = options.maxWorker ?? this.maxWorker;
     /**
      * init worker factory
      */
@@ -96,40 +116,143 @@ export class WorkerManager<CMD extends Command> {
         options as WorkerManagerConstructorWithWorkerFactory;
       this.workerFactory = workerFactory;
     }
-    this.addWorker(this.workerFactory(options.options), {
-      timeout: initialTimeout,
-    })
-      .then(() => {
-        console.info("Initialized worker");
-      })
-      .catch((err: Error | ErrorEvent) => {
-        if (err.message === ErrorMessages.timeout) {
-          console.warn("Timeout!");
-        } else {
-          // "Hết cứu"
-          throw err;
+
+    this.eventEmitter.addListener("todoQueue.push", async ({ requestId }) => {
+      let worker: WorkerArrayItem | undefined;
+      for (let wk of this.workers) {
+        await wk.wk;
+        if (wk.workload.length < this.maxWorkload) {
+          worker = wk;
         }
+      }
+      const request = this.todoQueue.find(({ id }) => id === requestId);
+      // Scale up if max workload reached
+      if (!worker && this.autoScale && this.workers.length < this.maxWorker) {
+        worker = await this.addWorker(this.workerFactory(this.workerOptions));
+        await worker.wk;
+      }
+      // If worker avaible excec request
+      if (worker && request) {
+        worker.workload.push(requestId);
+        this.pendingQueue.push(request);
+        this.todoQueue = this.todoQueue.filter(({ id }) => {
+          return id !== requestId;
+        });
+        try {
+          await this.excecCommand(
+            worker,
+            requestId,
+            request.command,
+            {
+              body: request.body,
+              signal: request.signal
+            }
+          );
+          this.pendingQueue = this.pendingQueue.filter(({ id }) => {
+            return id !== requestId;
+          });
+          worker.workload = worker.workload.filter((id) => {
+            return id !== requestId;
+          });
+          if (this.todoQueue.length > 0) {
+            this.eventEmitter.emit("todoQueue.push", {
+              requestId: this.todoQueue[0].id,
+            });
+          }
+        } catch (err) {
+
+        }
+
+      }
+    });
+  }
+  /**
+   * starting to init worker
+   */
+  public async boostrap(params?: { timeout?: number }) {
+    await this.addWorker(this.workerFactory(this.workerOptions), {
+      timeout: params?.timeout,
+    });
+
+    return this;
+  }
+  public async excec<Key extends keyof CMD>(
+    cmd: Key,
+    { body, signal }: Parameters<CMD[Key]>[0]
+  ) {
+
+
+
+    return new Promise<ReturnType<CMD[Key]>>((resolve, reject) => {
+
+      const completeListenter = ({
+        id,
+        payload,
+      }: Events["exec-complete"][0]) => {
+        if (id === requestId) {
+          this.eventEmitter.removeListener("exec-complete", completeListenter);
+          this.eventEmitter.removeListener("exec-error", errorListener);
+          resolve(payload);
+        }
+      };
+      const errorListener = ({
+        id,
+        payload,
+      }: Events["exec-error"][0]) => {
+        if (id === requestId) {
+          this.eventEmitter.removeListener("exec-complete", completeListenter);
+          this.eventEmitter.removeListener("exec-error", errorListener);
+          reject(payload)
+        }
+      }
+      this.eventEmitter.addListener("exec-complete", completeListenter);
+
+      this.eventEmitter.addListener("exec-error", errorListener);
+
+      const requestId = uuid();
+      this.todoQueue.push({
+        id: requestId,
+        body,
+        command: cmd,
       });
+      this.eventEmitter.emit("todoQueue.push", { requestId });
+
+      if (signal) {
+
+        signal.onabort = () => {
+          this.eventEmitter.removeListener("exec-complete", completeListenter);
+          this.eventEmitter.removeListener("exec-error", errorListener);
+          //Remove from todo
+          //If while exec command, the command will throw Error
+          this.todoQueue = this.todoQueue.filter((todo) => {
+            return requestId !== todo.id
+          })
+          reject(signal.reason)
+        }
+      }
+    });
   }
 
-  public async addWorker(worker: Worker, options?: { timeout?: number }) {
-    return new Promise<(typeof this.workers)[number]>((resolve, reject) => {
+  private async addWorker(worker: Worker, options?: { timeout?: number }) {
+    let id: string | undefined;
+    const promise = new Promise<Worker>((resolve, reject) => {
+      /**
+       * Terminate
+       */
       const timeout = setTimeout(() => {
         worker.terminate();
         reject(new Error("timeout"));
       }, options?.timeout ?? 60 * 1000);
-
+      /**
+       *
+       * waiting for ping message
+       */
       const eventListener = (msg: MessageEvent<MessageEvent>) => {
         if (msg.data.type === "ping") {
           clearTimeout(timeout);
           worker.removeEventListener("message", eventListener);
-          const id = uuid();
-          const result = {
-            id,
-            wk: worker,
-            workload: [],
-          };
-          this.workers.push(result);
+          id = uuid();
+
           const pongMsg: PongMsg = {
             type: "pong",
             payload: {
@@ -138,7 +261,7 @@ export class WorkerManager<CMD extends Command> {
             },
           };
           worker.postMessage(pongMsg);
-          resolve(result);
+          resolve(worker);
         }
       };
       const errorListener = (error: ErrorEvent) => {
@@ -148,51 +271,58 @@ export class WorkerManager<CMD extends Command> {
       worker.addEventListener("message", eventListener);
       worker.addEventListener("error", errorListener);
     });
-  }
-  public async excec<Key extends keyof CMD>(
-    cmd: Key,
-    ...args: Parameters<CMD[Key]>
-  ) {
-    const requestId = uuid();
-    this.queue.push({
-      id: requestId,
-      args,
-      command: cmd,
-    });
-    // this.eventEmitter.emit("add", requestId);
+
+    const result = {
+      id: id!,
+      wk: promise,
+      workload: [] as string[],
+    };
+    this.workers.push(result);
+    return result;
   }
 
-  private async excecCommandFromQueue<Key extends keyof CMD>(
+  private async excecCommand<Key extends keyof CMD>(
+    worker: (typeof this.workers)[number],
     id: string,
     cmd: Key,
-    ...args: any[]
-  ) {
-    let worker = this.workers.find(({ workload }) => {
-      return workload.length < this.maxWorkload;
-    });
-    if (!worker && this.autoScale) {
-      worker = await this.addWorker(this.workerFactory(this.workerOptions));
-    } else {
-      return;
-    }
-    const msg: ExecRequest = {
-      id,
-      type: "excec-request",
-      payload: {
-        cmd: cmd as string,
-        args,
-      },
-    };
-    const execListener = (msg: MessageEvent<Worker2MainMsg>) => {
-      if (msg.data.type === "excec-response") {
-        if (msg.data.id === id) {
-          worker.wk.removeEventListener("message", execListener);
 
-          // this.eventEmitter.on("exec-complete", ({ id }) => {});
+    { body, signal }: { body: any, signal?: AbortSignal }
+  ) {
+    const result = await new Promise(async (resolve) => {
+      const msg: ExecRequest = {
+        id,
+        type: "exec-request",
+        payload: {
+          cmd: cmd as string,
+          body,
+          signal: signal
+        },
+      };
+      const wk = (await worker.wk)
+      const execListener = async (msg: MessageEvent<Worker2MainMsg>) => {
+        if (msg.data.type === "exec-response") {
+          if (msg.data.id === id) {
+            wk.removeEventListener("message", execListener);
+            resolve(msg.data.payload);
+            this.eventEmitter.emit("exec-complete", {
+              id: msg.data.id,
+              payload: msg.data.payload,
+            });
+          }
+        } else if (msg.data.type === "exec-error") {
+          if (msg.data.id === id) {
+            wk.removeEventListener("message", execListener);
+            this.eventEmitter.emit("exec-error", {
+              id: msg.data.id,
+              payload: msg.data.payload,
+            });
+          }
         }
-      }
-    };
-    worker.wk.addEventListener("message", () => {});
-    worker.wk.postMessage(msg);
+      };
+      wk.addEventListener("message", execListener);
+      wk.postMessage(msg);
+    });
+
+    return result;
   }
 }

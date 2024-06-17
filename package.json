@@ -1,5 +1,5 @@
 {
-  "name": "workerr",
+  "name": "@byterygon/workerr",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -16,6 +16,12 @@
         "default": "./dist/worker.js",
         "types": "./dist/wthread/index.d.ts"
       }
+    },
+    "./utils": {
+      "import": {
+        "default": "./dist/utils.js",
+        "types": "./dist/utils.d.ts"
+      }
     }
   },
   "files": [
@@ -30,11 +36,10 @@
   },
   "dependencies": {
     "events": "^3.3.0",
-    "react-router-dom": "^6.23.1",
     "workerr": "file:workerr-0.0.0.tgz"
   },
   "devDependencies": {
-    "@types/node": "^20.12.11",
+    "@types/node": "^20.14.2",
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
     "@typescript-eslint/eslint-plugin": "^7.2.0",
@@ -45,6 +50,7 @@
     "eslint-plugin-react-refresh": "^0.4.6",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "react-router-dom": "^6.23.1",
     "typescript": "^5.2.2",
     "vite": "^5.2.0",
     "vite-plugin-dts": "^3.9.1"

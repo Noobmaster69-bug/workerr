@@ -10,6 +10,7 @@ export default defineConfig({
       entry: {
         main: resolve(__dirname, "lib/mthread/index.ts"),
         worker: resolve(__dirname, "lib/wthread/index.ts"),
+        utils: resolve(__dirname, "lib/utils.ts"),
       },
       formats: ["es"],
     },
